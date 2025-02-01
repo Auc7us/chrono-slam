@@ -61,14 +61,14 @@ double mesh_resolution = 0.02;
 int main(int argc, char* argv[]) {
     std::cout << "Chrono-ROS Integrated Viper Simulation\nChrono Version: " << CHRONO_VERSION << std::endl;
 
-    // Create the Chrono physical system
+    // ✅ Declare the Chrono physical system **before** using it
     ChSystemNSC sys;
     sys.SetGravitationalAcceleration(ChVector3d(0, 0, -9.81));
     sys.SetCollisionSystemType(ChCollisionSystem::Type::BULLET);
-    
+
     std::cout << "Terrain done" << std::endl;
 
-    // Create the terrain
+    // ✅ Create the terrain
     vehicle::SCMTerrain terrain(&sys);
     terrain.SetPlane(ChCoordsys<>(ChVector3d(0, 0, -0.5)));
     terrain.Initialize(15, 15, mesh_resolution);
@@ -79,6 +79,45 @@ int main(int argc, char* argv[]) {
     Viper viper(&sys, ViperWheelType::RealWheel);
     viper.SetDriver(driver);
     viper.Initialize(ChFrame<>(ChVector3d(0, 0, 0.5), QUNIT));
+
+    std::cout << "Adding rocks" << std::endl;
+    std::vector<std::shared_ptr<ChBodyAuxRef>> rocks;
+    std::shared_ptr<ChContactMaterial> rockSurfaceMaterial = ChContactMaterial::DefaultMaterial(sys.GetContactMethod());
+
+    // ✅ Properly scoped rock creation loop
+    for (int i = 0; i < 20; i++) {
+        std::string rock_obj_path;
+        if (i % 3 == 0) {
+            rock_obj_path = GetChronoDataFile("robot/curiosity/rocks/rock1.obj");
+        } else if (i % 3 == 1) {
+            rock_obj_path = GetChronoDataFile("robot/curiosity/rocks/rock2.obj");
+        } else {
+            rock_obj_path = GetChronoDataFile("robot/curiosity/rocks/rock3.obj");
+        }
+
+        auto rock_mesh = ChTriangleMeshConnected::CreateFromWavefrontFile(rock_obj_path, false, true);
+        rock_mesh->Transform(ChVector3d(0, 0, 0), ChMatrix33<>(0.15));  // Scale rocks
+        rock_mesh->RepairDuplicateVertexes(1e-9);
+
+        double rock_mass = 50.0;
+        ChVector3d rock_pos((i % 5) * 2.0 - 5.0, (i / 5) * 2.0 - 5.0, 0.0);
+
+        auto rock_body = chrono_types::make_shared<ChBodyAuxRef>();
+        rock_body->SetMass(rock_mass);
+        rock_body->SetPos(rock_pos);
+        rock_body->SetFixed(false);  // ✅ FIXED: Use SetFixed() instead of SetBodyFixed()
+
+        auto rock_shape = chrono_types::make_shared<ChCollisionShapeTriangleMesh>(rockSurfaceMaterial, rock_mesh, false, false, 0.005);
+        rock_body->AddCollisionShape(rock_shape);
+        rock_body->EnableCollision(true);
+
+        auto rock_visual = chrono_types::make_shared<ChVisualShapeTriangleMesh>();
+        rock_visual->SetMesh(rock_mesh);
+        rock_body->AddVisualShape(rock_visual);
+
+        sys.Add(rock_body);
+        rocks.push_back(rock_body);
+    }
 
     std::cout << "Manager start" << std::endl;
     auto manager = chrono_types::make_shared<ChSensorManager>(&sys);
@@ -102,11 +141,20 @@ int main(int argc, char* argv[]) {
     manager->AddSensor(lidar);
 
     auto radar = chrono_types::make_shared<ChRadarSensor>(
-        viper.GetChassis()->GetBody(), 50, offset_pose, 240, 120, 
-        (float)(CH_PI / 1.5), (float)(CH_PI / 5), 100.f);
+        viper.GetChassis()->GetBody(),  // Ensure it's attached to the rover
+        50,                             // Update rate (Hz)
+        offset_pose,                     // Position relative to chassis
+        240, 120,                        // Resolution
+        (float)(CH_PI / 1.5),            // Horizontal FOV
+        (float)(CH_PI / 5),              // Vertical FOV
+        100.f);                          // Max range
+
     radar->PushFilter(chrono_types::make_shared<ChFilterRadarXYZReturn>("Radar Data"));
+    radar->PushFilter(chrono_types::make_shared<ChFilterRadarVisualizeCluster>(960, 480, "Radar Cluster View"));  // ✅ NEW: Add cluster filter
     radar->PushFilter(chrono_types::make_shared<ChFilterRadarXYZVisualize>(960, 480, 0.2, "Radar View"));
+
     manager->AddSensor(radar);
+
 
     auto cam = chrono_types::make_shared<ChCameraSensor>(
         viper.GetChassis()->GetBody(), 50, offset_pose, 960, 480, CH_PI / 3);
