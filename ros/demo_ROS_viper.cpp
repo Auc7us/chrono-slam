@@ -9,7 +9,7 @@
 // http://projectchrono.org/license-chrono.txt.
 //
 // =============================================================================
-// Authors: Integrated Script
+// Authors: Keshav Sharan
 // =============================================================================
 //
 // Demo showing Viper Rover on SCM Terrain with obstacles, sensors, and ROS integration.
@@ -138,11 +138,11 @@ int main(int argc, char* argv[]) {
     sys.SetCollisionSystemType(ChCollisionSystem::Type::BULLET);
     sys.SetGravitationalAcceleration(ChVector3d(0, 0, -9.81));
 
-    // Create terrain
-    vehicle::SCMTerrain terrain(&sys);
-    terrain.SetPlane(ChCoordsys<>(ChVector3d(0, 0, -0.5)));
-    terrain.Initialize(15, 15, mesh_resolution);
-    terrain.SetSoilParameters(0.2e6, 0, 1.1, 0, 30, 0.01, 4e7, 3e4);
+    // // Create terrain
+    // vehicle::SCMTerrain terrain(&sys);
+    // terrain.SetPlane(ChCoordsys<>(ChVector3d(0, 0, -0.5)));
+    // terrain.Initialize(15, 15, mesh_resolution);
+    // terrain.SetSoilParameters(0.2e6, 0, 1.1, 0, 30, 0.01, 4e7, 3e4);
 
     // Create Viper Rover
     auto driver = chrono_types::make_shared<ViperDCMotorControl>();
@@ -236,6 +236,134 @@ int main(int argc, char* argv[]) {
 
         // sys.Add(rock_body);
         rocks.push_back(rock_body);
+    }
+
+    //
+    // THE DEFORMABLE TERRAIN
+    //
+
+    vehicle::SCMTerrain terrain(&sys);
+    // Displace/rotate the terrain reference plane.
+    // Note that SCMTerrain uses a default ISO reference frame (Z up). Since the mechanism is modeled here in
+    // a Y-up global frame, we rotate the terrain plane by -90 degrees about the X axis.
+    // Note: Irrlicht uses a Y-up frame
+    terrain.SetPlane(ChCoordsys<>(ChVector3d(0, 0, -0.5)));
+
+    double length = 15;
+    double width = 15;
+    terrain.Initialize(length, width, mesh_resolution);
+
+    auto lunar_material = chrono_types::make_shared<ChVisualMaterial>();
+    lunar_material->SetAmbientColor({0.0, 0.0, 0.0}); //0.65f,0.65f,0.65f
+    lunar_material->SetDiffuseColor({0.7, 0.7, 0.7});
+    lunar_material->SetSpecularColor({1.0, 1.0, 1.0});
+    lunar_material->SetUseSpecularWorkflow(true);
+    lunar_material->SetRoughness(0.8f);
+    lunar_material->SetAnisotropy(1.f);
+    lunar_material->SetUseHapke(true);
+    lunar_material->SetHapkeParameters(0.32357f, 0.23955f, 0.30452f, 1.80238f, 0.07145f, 0.3f,23.4f*(CH_PI/180));
+    lunar_material->SetClassID(30000);
+    lunar_material->SetInstanceID(20000);
+    auto mesh = terrain.GetMesh();
+
+    {
+        if(mesh->GetNumMaterials() == 0){
+            mesh->AddMaterial(lunar_material);
+        }
+        else{
+            mesh->GetMaterials()[0] = lunar_material;
+        }
+    }
+    // Set the soil terramechanical parameters
+    if (var_params) {
+        // Here we use the soil callback defined at the beginning of the code
+        auto my_params = chrono_types::make_shared<MySoilParams>();
+        terrain.RegisterSoilParametersCallback(my_params);
+    } else {
+        // If var_params is set to be false, these parameters will be used
+        terrain.SetSoilParameters(0.2e6,  // Bekker Kphi
+                                  0,      // Bekker Kc
+                                  1.1,    // Bekker n exponent
+                                  0,      // Mohr cohesive limit (Pa)
+                                  30,     // Mohr friction limit (degrees)
+                                  0.01,   // Janosi shear coefficient (m)
+                                  4e7,    // Elastic stiffness (Pa/m), before plastic yield, must be > Kphi
+                                  3e4     // Damping (Pa s/m), proportional to negative vertical speed (optional)
+        );
+    }
+
+    // Set up bulldozing factors
+    if (enable_bulldozing) {
+        terrain.EnableBulldozing(true);  // inflate soil at the border of the rut
+        terrain.SetBulldozingParameters(
+            55,  // angle of friction for erosion of displaced material at the border of the rut
+            1,   // displaced material vs downward pressed material.
+            5,   // number of erosion refinements per timestep
+            6);  // number of concentric vertex selections subject to erosion
+    }
+
+    // We need to add a moving patch under every wheel
+    // Or we can define a large moving patch at the pos of the rover body
+    if (enable_moving_patch) {
+        terrain.AddMovingPatch(Wheel_1, ChVector3d(0, 0, 0), ChVector3d(0.5, 2 * wheel_range, 2 * wheel_range));
+        terrain.AddMovingPatch(Wheel_2, ChVector3d(0, 0, 0), ChVector3d(0.5, 2 * wheel_range, 2 * wheel_range));
+        terrain.AddMovingPatch(Wheel_3, ChVector3d(0, 0, 0), ChVector3d(0.5, 2 * wheel_range, 2 * wheel_range));
+        terrain.AddMovingPatch(Wheel_4, ChVector3d(0, 0, 0), ChVector3d(0.5, 2 * wheel_range, 2 * wheel_range));
+
+        for (int i = 0; i < 20; i++) {
+            terrain.AddMovingPatch(rocks[i], ChVector3d(0, 0, 0), ChVector3d(0.5, 0.5, 0.5));
+        }
+    }
+
+    // Set some visualization parameters: either with a texture, or with falsecolor plot, etc.
+    terrain.SetPlotType(vehicle::SCMTerrain::PLOT_PRESSURE, 0, 20000);
+    terrain.SetMeshWireframe(true);
+
+#ifndef CHRONO_IRRLICHT
+    if (vis_type == ChVisualSystem::Type::IRRLICHT)
+        vis_type = ChVisualSystem::Type::VSG;
+#endif
+#ifndef CHRONO_VSG
+    if (vis_type == ChVisualSystem::Type::VSG)
+        vis_type = ChVisualSystem::Type::IRRLICHT;
+#endif
+
+    std::shared_ptr<ChVisualSystem> vis;
+    switch (vis_type) {
+        case ChVisualSystem::Type::IRRLICHT: {
+#ifdef CHRONO_IRRLICHT
+            auto vis_irr = chrono_types::make_shared<ChVisualSystemIrrlicht>();
+            vis_irr->AttachSystem(&sys);
+            vis_irr->SetCameraVertical(CameraVerticalDir::Z);
+            vis_irr->SetWindowSize(800, 600);
+            vis_irr->SetWindowTitle("Viper Rover on SCM");
+            vis_irr->Initialize();
+            vis_irr->AddLogo();
+            vis_irr->AddSkyBox();
+            vis_irr->AddCamera(ChVector3d(1.0, 2.0, 1.4), ChVector3d(0, 0, wheel_range));
+            vis_irr->AddTypicalLights();
+            vis_irr->AddLightWithShadow(ChVector3d(-5.0, -0.5, 8.0), ChVector3d(-1, 0, 0), 100, 1, 35, 85, 512,
+                                        ChColor(0.8f, 0.8f, 0.8f));
+            vis_irr->EnableShadows();
+
+            vis = vis_irr;
+#endif
+            break;
+        }
+        default:
+        case ChVisualSystem::Type::VSG: {
+#ifdef CHRONO_VSG
+            auto vis_vsg = chrono_types::make_shared<ChVisualSystemVSG>();
+            vis_vsg->AttachSystem(&sys);
+            vis_vsg->SetWindowSize(800, 600);
+            vis_vsg->SetWindowTitle("Viper Rover on SCM");
+            vis_vsg->AddCamera(ChVector3d(1.0, 2.0, 1.4), ChVector3d(0, 0, wheel_range));
+            vis_vsg->Initialize();
+
+            vis = vis_vsg;
+#endif
+            break;
+        }
     }
 
     // Sensor Manager
