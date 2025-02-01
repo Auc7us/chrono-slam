@@ -21,6 +21,8 @@
 #include "chrono/physics/ChSystemNSC.h"
 #include "chrono/physics/ChBodyEasy.h"
 #include "chrono/utils/ChUtilsInputOutput.h"
+#include "chrono/physics/ChInertiaUtils.h"
+
 #include "chrono_vehicle/terrain/SCMTerrain.h"
 
 #include "chrono_sensor/sensors/ChLidarSensor.h"
@@ -38,6 +40,7 @@
 #include "chrono_ros/handlers/ChROSClockHandler.h"
 #include "chrono_ros/handlers/ChROSBodyHandler.h"
 #include "chrono_ros/handlers/robot/viper/ChROSViperDCMotorControlHandler.h"
+// #include "chrono_thirdparty/filesystem/path.h"
 
 #include "chrono/assets/ChVisualSystem.h"
 
@@ -51,17 +54,89 @@ using namespace chrono::vsg3d;
 #endif
 
 using namespace chrono;
+using namespace chrono::irrlicht;
 using namespace chrono::viper;
 using namespace chrono::sensor;
 using namespace chrono::ros;
 
+using namespace irr;
+
 ChVisualSystem::Type vis_type = ChVisualSystem::Type::VSG;
 double mesh_resolution = 0.02;
+bool enable_bulldozing = false; // Enable/disable bulldozing effects
+bool enable_moving_patch = true; // Enable/disable moving patch feature
+bool var_params = true; // If true, use provided callback to change soil properties based on location
+ViperWheelType wheel_type = ViperWheelType::RealWheel; // Define Viper rover wheel type
+
+class MySoilParams : public vehicle::SCMTerrain::SoilParametersCallback {
+  public:
+    virtual void Set(const ChVector3d& loc,
+                     double& Bekker_Kphi,
+                     double& Bekker_Kc,
+                     double& Bekker_n,
+                     double& Mohr_cohesion,
+                     double& Mohr_friction,
+                     double& Janosi_shear,
+                     double& elastic_K,
+                     double& damping_R) override {
+        Bekker_Kphi = 0.82e6;
+        Bekker_Kc = 0.14e4;
+        Bekker_n = 1.0;
+        Mohr_cohesion = 0.017e4;
+        Mohr_friction = 35.0;
+        Janosi_shear = 1.78e-2;
+        elastic_K = 2e8;
+        damping_R = 3e4;
+    }
+};
+
+// Use custom material for the Viper Wheel
+bool use_custom_mat = false;
+
+std::shared_ptr<ChContactMaterial> CustomWheelMaterial(ChContactMethod contact_method) {
+    float mu = 0.4f;   // coefficient of friction
+    float cr = 0.1f;   // coefficient of restitution
+    float Y = 2e7f;    // Young's modulus
+    float nu = 0.3f;   // Poisson ratio
+    float kn = 2e5f;   // normal stiffness
+    float gn = 40.0f;  // normal viscous damping
+    float kt = 2e5f;   // tangential stiffness
+    float gt = 20.0f;  // tangential viscous damping
+
+    switch (contact_method) {
+        case ChContactMethod::NSC: {
+            auto matNSC = chrono_types::make_shared<ChContactMaterialNSC>();
+            matNSC->SetFriction(mu);
+            matNSC->SetRestitution(cr);
+            return matNSC;
+        }
+        case ChContactMethod::SMC: {
+            auto matSMC = chrono_types::make_shared<ChContactMaterialSMC>();
+            matSMC->SetFriction(mu);
+            matSMC->SetRestitution(cr);
+            matSMC->SetYoungModulus(Y);
+            matSMC->SetPoissonRatio(nu);
+            matSMC->SetKn(kn);
+            matSMC->SetGn(gn);
+            matSMC->SetKt(kt);
+            matSMC->SetGt(gt);
+            return matSMC;
+        }
+        default:
+            return std::shared_ptr<ChContactMaterial>();
+    }
+}
 
 int main(int argc, char* argv[]) {
+    std::cout << "Copyright (c) 2017 projectchrono.org\nChrono version: " << CHRONO_VERSION << std::endl;
+    
+    // Global parameter for moving patch size:
+    double wheel_range = 0.5;
+
+    // Create a Chrono physical system and associated collision system
     ChSystemNSC sys;
-    sys.SetGravitationalAcceleration(ChVector3d(0, 0, -9.81));
     sys.SetCollisionSystemType(ChCollisionSystem::Type::BULLET);
+    sys.SetGravitationalAcceleration(ChVector3d(0, 0, -9.81));
 
     // Create terrain
     vehicle::SCMTerrain terrain(&sys);
@@ -71,11 +146,36 @@ int main(int argc, char* argv[]) {
 
     // Create Viper Rover
     auto driver = chrono_types::make_shared<ViperDCMotorControl>();
-    Viper viper(&sys, ViperWheelType::RealWheel);
+    Viper viper(&sys, wheel_type);
+    // Viper viper(&sys, ViperWheelType::RealWheel);
     viper.SetDriver(driver);
-    viper.Initialize(ChFrame<>(ChVector3d(0, 0, 0.5), QUNIT));
+    if (use_custom_mat){
+        viper.SetWheelContactMaterial(CustomWheelMaterial(ChContactMethod::NSC));
+    }
+    viper.Initialize(ChFrame<>(ChVector3d(-5, 0, -0.2), QUNIT));
 
-    // Add Rocks (Positions are now EXACTLY as in your reference code)
+    // Get wheels and bodies to set up SCM patches
+    auto Wheel_1 = viper.GetWheel(ViperWheelID::V_LF)->GetBody();
+    auto Wheel_2 = viper.GetWheel(ViperWheelID::V_RF)->GetBody();
+    auto Wheel_3 = viper.GetWheel(ViperWheelID::V_LB)->GetBody();
+    auto Wheel_4 = viper.GetWheel(ViperWheelID::V_RB)->GetBody();
+    auto Body_1 = viper.GetChassis()->GetBody();
+
+    // Obstacles
+    std::vector<std::shared_ptr<ChBodyAuxRef>> rocks;
+    std::shared_ptr<ChContactMaterial> rockSurfaceMaterial = ChContactMaterial::DefaultMaterial(sys.GetContactMethod());
+
+    // Rock material
+    auto rock_vis_mat = chrono_types::make_shared<ChVisualMaterial>();
+    rock_vis_mat->SetAmbientColor({1,1,1}); //0.65f,0.65f,0.65f
+    rock_vis_mat->SetDiffuseColor({1,1,1});
+    rock_vis_mat->SetSpecularColor({1,1,1});
+    rock_vis_mat->SetUseSpecularWorkflow(true);
+    rock_vis_mat->SetRoughness(1.0f);
+    rock_vis_mat->SetUseHapke(true);
+    rock_vis_mat->SetHapkeParameters(0.32357f, 0.23955f, 0.30452f, 1.80238f, 0.07145f, 0.3f,23.4f*(CH_PI/180));
+
+    // Rocks' Predefined Positions
     std::vector<ChVector3d> rock_positions = {
         {1.0, -0.5, 0.0}, {-0.5, -0.5, 0.0}, {2.4, 0.4, 0.0}, {0.6, 1.0, 0.0}, {5.5, 1.2, 0.0},
         {1.2, 2.1, 0.0}, {-0.3, -2.1, 0.0}, {0.4, 2.5, 0.0}, {4.2, 1.4, 0.0}, {5.0, 2.4, 0.0},
@@ -83,30 +183,58 @@ int main(int argc, char* argv[]) {
         {-2.0, -1.1, 0.0}, {-5.0, -2.1, 0.0}, {1.5, -0.8, 0.0}, {-2.6, 1.6, 0.0}, {-2.0, 1.8, 0.0}
     };
 
-    std::vector<std::shared_ptr<ChBodyAuxRef>> rocks;
-    std::shared_ptr<ChContactMaterial> rockSurfaceMaterial = ChContactMaterial::DefaultMaterial(sys.GetContactMethod());
-
     for (int i = 0; i < 20; i++) {
         std::string rock_obj_path = GetChronoDataFile("robot/curiosity/rocks/rock" + std::to_string(i % 3 + 1) + ".obj");
 
         auto rock_mesh = ChTriangleMeshConnected::CreateFromWavefrontFile(rock_obj_path, false, true);
-        rock_mesh->Transform(ChVector3d(0, 0, 0), ChMatrix33<>(0.15));
+        double scale_ratio = 0.15;
+        rock_mesh->Transform(ChVector3d(0, 0, 0), ChMatrix33<>(scale_ratio));
         rock_mesh->RepairDuplicateVertexes(1e-9);
 
+        // compute mass inertia from mesh
+        double mmass;
+        ChVector3d mcog;
+        ChMatrix33<> minertia;
+        double mdensity = 8000;  // paramsH->bodyDensity;
+        rock_mesh->ComputeMassProperties(true, mmass, mcog, minertia);
+        ChMatrix33<> principal_inertia_rot;
+        ChVector3d principal_I;
+        ChInertiaUtils::PrincipalInertia(minertia, principal_I, principal_inertia_rot);
+
+        // set the abs orientation, position and velocity
         auto rock_body = chrono_types::make_shared<ChBodyAuxRef>();
-        rock_body->SetMass(50.0);
-        rock_body->SetPos(rock_positions[i]);
+        ChQuaternion<> rock_rot = QuatFromAngleX(CH_PI / 2);
+        // ChVector3d rock_pos;
+        // rock_body->SetMass(50.0);
+
+        rock_body->SetFrameCOMToRef(ChFrame<>(mcog, principal_inertia_rot));
+
+        rock_body->SetMass(mmass * mdensity);
+        rock_body->SetInertiaXX(mdensity * principal_I);
+        rock_body->SetFrameRefToAbs(ChFrame<>(ChVector3d(rock_positions[i]), ChQuaternion<>(rock_rot)));
+        sys.Add(rock_body);
+
+        // rock_body->SetPos(rock_positions[i]);
         rock_body->SetFixed(false);
 
         auto rock_shape = chrono_types::make_shared<ChCollisionShapeTriangleMesh>(rockSurfaceMaterial, rock_mesh, false, false, 0.005);
         rock_body->AddCollisionShape(rock_shape);
         rock_body->EnableCollision(true);
 
-        auto rock_visual = chrono_types::make_shared<ChVisualShapeTriangleMesh>();
-        rock_visual->SetMesh(rock_mesh);
-        rock_body->AddVisualShape(rock_visual);
+        auto rock_vis_mesh = chrono_types::make_shared<ChVisualShapeTriangleMesh>();
+        rock_vis_mesh->SetMesh(rock_mesh);
+        rock_vis_mesh->SetBackfaceCull(true);
 
-        sys.Add(rock_body);
+        if(rock_vis_mesh->GetNumMaterials() == 0){
+            rock_vis_mesh->AddMaterial(rock_vis_mat);
+        }
+        else{
+            rock_vis_mesh->GetMaterials()[0] = rock_vis_mat;
+        }
+
+        rock_body->AddVisualShape(rock_vis_mesh);
+
+        // sys.Add(rock_body);
         rocks.push_back(rock_body);
     }
 
