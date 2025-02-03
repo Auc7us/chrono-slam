@@ -381,55 +381,70 @@ int main(int argc, char* argv[]) {
 
     // Lidar Sensor
     auto offset_pose = ChFrame<>(ChVector3d(1.5, 0, 0.4), QuatFromAngleZ(0));
-    auto lidar = chrono_types::make_shared<ChLidarSensor>(viper.GetChassis()->GetBody(),  // body lidar is attached to
-                                                          50,                             // scanning rate in Hz
-                                                          offset_pose,                    // offset pose
-                                                          480,                  // number of horizontal samples
-                                                          300,                  // number of vertical channels
-                                                          (float)(2 * CH_PI),   // horizontal field of view
-                                                          (float)CH_PI / 12, (float)-CH_PI / 3,
-                                                          140.0f);              // vertical field of view
-    lidar->SetName("Lidar Sensor 1");
-    lidar->SetLag(0.f);
-    lidar->SetCollectionWindow(0.02f);
+    auto offset_pose_stereo_L = ChFrame<>(ChVector3d(1.5, -0.2, 0.4), QuatFromAngleZ(0));
+    auto offset_pose_stereo_R = ChFrame<>(ChVector3d(1.5,  0.2, 0.4), QuatFromAngleZ(0));
 
-    lidar->PushFilter(chrono_types::make_shared<ChFilterDIAccess>()); // Provides the host access to the Depth,Intensity data
-    lidar->PushFilter(chrono_types::make_shared<ChFilterVisualize>(960, 480, "Raw Lidar Depth Data"));
-    lidar->PushFilter(chrono_types::make_shared<ChFilterPCfromDepth>()); // Convert Depth,Intensity data to XYZI point
-    lidar->PushFilter(chrono_types::make_shared<ChFilterVisualizePointCloud>(960, 600, 0.25, "Lidar Point Cloud"));
-    lidar->PushFilter(chrono_types::make_shared<ChFilterXYZIAccess>());
-    manager->AddSensor(lidar);
+    // auto lidar = chrono_types::make_shared<ChLidarSensor>(viper.GetChassis()->GetBody(),  // body lidar is attached to
+    //                                                       50,                             // scanning rate in Hz
+    //                                                       offset_pose,                    // offset pose
+    //                                                       480,                  // number of horizontal samples
+    //                                                       300,                  // number of vertical channels
+    //                                                       (float)(2 * CH_PI),   // horizontal field of view
+    //                                                       (float)CH_PI / 12, (float)-CH_PI / 3,
+    //                                                       140.0f);              // vertical field of view
+    // lidar->SetName("Lidar Sensor 1");
+    // lidar->SetLag(0.f);
+    // lidar->SetCollectionWindow(0.02f);
+
+    // lidar->PushFilter(chrono_types::make_shared<ChFilterDIAccess>()); // Provides the host access to the Depth,Intensity data
+    // lidar->PushFilter(chrono_types::make_shared<ChFilterVisualize>(960, 480, "Raw Lidar Depth Data"));
+    // lidar->PushFilter(chrono_types::make_shared<ChFilterPCfromDepth>()); // Convert Depth,Intensity data to XYZI point
+    // lidar->PushFilter(chrono_types::make_shared<ChFilterVisualizePointCloud>(960, 600, 0.25, "Lidar Point Cloud"));
+    // lidar->PushFilter(chrono_types::make_shared<ChFilterXYZIAccess>());
+    // manager->AddSensor(lidar);
 
 
-    // Radar Sensor
-    auto radar = chrono_types::make_shared<ChRadarSensor>(viper.GetChassis()->GetBody(),
-                                                          50,
-                                                          offset_pose,
-                                                          240,
-                                                          120,
-                                                          (float)(CH_PI / 1.5),
-                                                          (float)(CH_PI / 5),
-                                                          100.f);
-    radar->SetName("Radar Sensor");
-    radar->SetLag(0.f);
-    radar->SetCollectionWindow(0.02f);
+    // // Radar Sensor
+    // auto radar = chrono_types::make_shared<ChRadarSensor>(viper.GetChassis()->GetBody(),
+    //                                                       50,
+    //                                                       offset_pose,
+    //                                                       240,
+    //                                                       120,
+    //                                                       (float)(CH_PI / 1.5),
+    //                                                       (float)(CH_PI / 5),
+    //                                                       100.f);
+    // radar->SetName("Radar Sensor");
+    // radar->SetLag(0.f);
+    // radar->SetCollectionWindow(0.02f);
 
-    radar->PushFilter(chrono_types::make_shared<ChFilterRadarXYZReturn>("Front Radar"));    
-    radar->PushFilter(chrono_types::make_shared<ChFilterRadarXYZVisualize>(960, 480, 0.2, "Radar View"));
-    manager->AddSensor(radar);
+    // radar->PushFilter(chrono_types::make_shared<ChFilterRadarXYZReturn>("Front Radar"));    
+    // radar->PushFilter(chrono_types::make_shared<ChFilterRadarXYZVisualize>(960, 480, 0.2, "Radar View"));
+    // manager->AddSensor(radar);
 
     // Camera Sensor
-    auto cam = chrono_types::make_shared<ChCameraSensor>(viper.GetChassis()->GetBody(), // body lidar is attached to
+    auto stereo_L = chrono_types::make_shared<ChCameraSensor>(viper.GetChassis()->GetBody(), // body lidar is attached to
                                                          50,                            // scanning rate in Hz
-                                                         offset_pose,                   // offset pose
+                                                         offset_pose_stereo_L,                   // offset pose
                                                          960,                           // image width
                                                          480,                           // image height
                                                          CH_PI / 3);                    // FOV
-    cam->SetName("Camera Sensor");
-    cam->SetLag(0.f);
-    cam->SetCollectionWindow(0.02f);                                                        
-    cam->PushFilter(chrono_types::make_shared<ChFilterVisualize>(960, 480, "Camera View"));
-    manager->AddSensor(cam);
+    stereo_L->SetName("Camera Sensor L");
+    stereo_L->SetLag(0.f);
+    stereo_L->SetCollectionWindow(0.02f);                                                        
+    stereo_L->PushFilter(chrono_types::make_shared<ChFilterVisualize>(960, 480, "Stereo View L"));
+    manager->AddSensor(stereo_L);
+
+    auto stereo_R = chrono_types::make_shared<ChCameraSensor>(viper.GetChassis()->GetBody(), // body lidar is attached to
+                                                         50,                            // scanning rate in Hz
+                                                         offset_pose_stereo_R,                   // offset pose
+                                                         960,                           // image width
+                                                         480,                           // image height
+                                                         CH_PI / 3);                    // FOV
+    stereo_R->SetName("Camera Sensor");
+    stereo_R->SetLag(0.f);
+    stereo_R->SetCollectionWindow(0.02f);                                                        
+    stereo_R->PushFilter(chrono_types::make_shared<ChFilterVisualize>(960, 480, "Stereo View R"));
+    manager->AddSensor(stereo_R);
 
     while (vis->Run()) {
 #if defined(CHRONO_IRRLICHT) || defined(CHRONO_VSG)
@@ -443,29 +458,9 @@ int main(int argc, char* argv[]) {
         // update sensor manager
         manager->Update();
 
-        // if (output) {
-        //     // write drive torques of all four wheels into file
-        //     csv << sys.GetChTime() << viper.GetWheelTracTorque(ViperWheelID::V_LF)
-        //         << viper.GetWheelTracTorque(ViperWheelID::V_RF) << viper.GetWheelTracTorque(ViperWheelID::V_LB)
-        //         << viper.GetWheelTracTorque(ViperWheelID::V_RB) << std::endl;
-        // }
-
         sys.DoStepDynamics(5e-4);
         viper.Update();
-        ////terrain.PrintStepStatistics(std::cout);
     }
 
-    // if (output) {
-    //     csv.WriteToFile(out_dir + "/output.dat");
-    // }
-
     return 0;
-    
-
-    // while (true) {
-    //     sys.DoStepDynamics(1e-3);
-    //     manager->Update();
-    // }
-
-    // return 0;
 }
